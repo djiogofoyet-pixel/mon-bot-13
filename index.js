@@ -1,30 +1,75 @@
 const { default: makeWASocket, useMultiFileAuthState, Browsers, DisconnectReason } = require('@whiskeysockets/baileys')
 const QRCode = require('qrcode')
-const fs = require('fs')
+const express = require('express')
 const pino = require('pino')
 
-const PREFIX = '.'
-const OWNER = 'KING'
-const BOTNAME = 'META JADAY'
-const VERSION = 'v1.6.4'
-const SIGNATURE = 'BY - © 2026 KING TECH'
+const app = express()
+const PORT = process.env.PORT || 3000
 
-let ANTI_LINK = {}
-let WARNINGS = {}
-let WELCOME = {}
+let latestQR = ''
+let isConnected = false
+let botName = 'META JADAY'
 
-process.on('unhandledRejection', (err) => console.error('Unhandled Rejection:', err))
-process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err))
+app.use(express.static('public'))
+app.use(express.urlencoded({ extended: true }))
 
-const format = (text) => `*${text.split('\n').join('\n*')}*`
+app.get('/', async (req, res) => {
+    const status = isConnected ? 
+    `<div class="status online">🟢 En ligne</div>` : 
+    `<div class="status offline">🔴 Hors ligne</div>`
 
-const getSquidhyMenu = () => `
-───((o ${BOTNAME} o))───
-- OWNER: ${OWNER}
-- VERSION: ${VERSION}
-- PREFIX: ${PREFIX}
-- MODE: 🟢 Public
-`
+    const qrSection = !isConnected && latestQR ? 
+    `<img src="${latestQR}" class="qr"/><p>Scan avec WhatsApp > Appareils liés</p>` :
+    `<p>En attente du QR...</p>`
+
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>${botName} - Panneau</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body{background:#0a0e1a;color:white;font-family:Arial;text-align:center;padding:20px}
+            .box{background:#131b2e;border:1px solid #1e2a47;border-radius:15px;padding:20px;margin:15px auto;max-width:400px}
+            h1{color:#00ff88}
+            .status{padding:10px;border-radius:10px;font-weight:bold}
+            .offline{background:#3d1f1f}
+            .online{background:#1f3d2a}
+            .qr{width:250px;background:white;padding:10px;border-radius:10px}
+            input{width:90%;padding:12px;border-radius:8px;border:none;background:#1e2a47;color:white;margin:10px 0}
+            .btn{width:90%;padding:12px;border:none;border-radius:8px;font-weight:bold;font-size:16px;cursor:pointer;margin:5px 0}
+            .deploy{background:linear-gradient(90deg,#00ff88,#00cc66);color:black}
+            .stop{background:#ff0044;color:white}
+        </style>
+    </head>
+    <body>
+        <div class="box">
+            <h1>${botName}</h1>
+            <p>Assistant Bot WhatsApp - Panneau de Controle</p>
+            <p style="color:#00ff88">Par KING TECH</p>
+        </div>
+
+        <div class="box">
+            ${status}
+        </div>
+
+        <div class="box">
+            <h2 style="color:#00ff88">Deploiement du Bot</h2>
+            <form method="POST" action="/deploy">
+                <input type="text" name="number" placeholder="Ex: 237651543248" />
+                <button class="btn deploy" type="submit">Deployer</button>
+            </form>
+            <button class="btn stop" onclick="alert('Arreter le bot depuis Render')">Arreter</button>
+            ${qrSection}
+        </div>
+    </body>
+    </html>
+    `)
+})
+
+app.post('/deploy', (req, res) => {
+    res.redirect('/')
+})
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info')
@@ -39,22 +84,19 @@ async function startBot() {
         const { connection, lastDisconnect, qr } = update
         
         if(qr) {
-            const qrLink = await QRCode.toDataURL(qr)
-            console.log('================================')
-            console.log('SCANNE CE LIEN POUR LE QR:')
-            console.log(qrLink)
-            console.log('================================')
+            latestQR = await QRCode.toDataURL(qr)
+            console.log('Nouveau QR généré')
         }
         
         if(connection === 'close') {
+            isConnected = false
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut
-            console.log('Connection closed. Reconnecting...', shouldReconnect)
-            if(shouldReconnect) {
-                startBot()
-            }
+            if(shouldReconnect) startBot()
         }
         
         if(connection === 'open') {
+            isConnected = true
+            latestQR = ''
             console.log('Bot connecté avec succès!')
         }
     })
@@ -62,4 +104,5 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds)
 }
 
+app.listen(PORT, () => console.log(`Panneau lancé sur le port ${PORT}`))
 startBot()
