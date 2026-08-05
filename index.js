@@ -1,107 +1,206 @@
-const { default: makeWASocket, useMultiFileAuthState, Browsers, DisconnectReason } = require('@whiskeysockets/baileys')
-const QRCode = require('qrcode')
-const express = require('express')
+const { default: makeWASocket, useMultiFileAuthState, Browsers, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys')
+const QRCode = require('qrcode') // <- pour afficher le QR en image
+const qrcodeTerminal = require('qrcode-terminal') // <- on garde au cas où
+const express = require('express') // <- pour le panneau
+const fs = require('fs')
+const fetch = require('node-fetch')
 const pino = require('pino')
+
+const PREFIX = '.'
+const OWNER = '𝐌𝐄𝐓𝐀'
+const BOTNAME = ' *===META JEADY===* '
+const VERSION = ' *v2.6.6* '
+const SIGNATURE = '© 2026 META JEADY'
+const GROQ_KEY = 'COLLE_TA_CLE_ICI' // ⚠️ Mets ta vraie clé ici
+const LOGO_PATH = './logo.jpg'
 
 const app = express()
 const PORT = process.env.PORT || 3000
 
-let latestQR = ''
+let ANTILINK = {}
+let WARNINGS = {}
+let AUTOAI = {}
+let WELCOME = {}
+let latestQR = null // <- pour stocker le QR
 let isConnected = false
-let botName = 'META JADAY'
 
-app.use(express.static('public'))
-app.use(express.urlencoded({ extended: true }))
+process.on('unhandledRejection', (err) => console.error('Unhandled Rejection:', err))
 
-app.get('/', async (req, res) => {
-    const status = isConnected ? 
-    `<div class="status online">🟢 En ligne</div>` : 
-    `<div class="status offline">🔴 Hors ligne</div>`
+const getSquichyMenu = () => `╭═══════════════╮
+║ ⚡ ${BOTNAME} ⚡
+║═══════════════║
+║ 👑 *OWNER* : ${OWNER}
+║ 📦 *VERSION* : ${VERSION}
+║ 🔖 *PREFIX* : ${PREFIX}
+║ 🌍 *MODE* : Public
+╰═══════════════╯
 
-    const qrSection = !isConnected && latestQR ? 
-    `<img src="${latestQR}" class="qr"/><p>Scan avec WhatsApp > Appareils liés</p>` :
-    `<p>En attente du QR...</p>`
+╭───「 *🔋ADMIN* GROUPE 」───╮
+│ • ${PREFIX}open → ouvrir le groupe
+│ • ${PREFIX}close → fermer le groupe
+│ • ${PREFIX}kick @tag
+│ • ${PREFIX}tagall
+│ • ${PREFIX}invite
+│ • ${PREFIX}antilink on/off
+│ • ${PREFIX}autoai on/off
+╰────────────────────────╯
 
-    res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>${botName} - Panneau</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body{background:#0a0e1a;color:white;font-family:Arial;text-align:center;padding:20px}
-            .box{background:#131b2e;border:1px solid #1e2a47;border-radius:15px;padding:20px;margin:15px auto;max-width:400px}
-            h1{color:#00ff88}
-            .status{padding:10px;border-radius:10px;font-weight:bold}
-            .offline{background:#3d1f1f}
-            .online{background:#1f3d2a}
-            .qr{width:250px;background:white;padding:10px;border-radius:10px}
-            input{width:90%;padding:12px;border-radius:8px;border:none;background:#1e2a47;color:white;margin:10px 0}
-            .btn{width:90%;padding:12px;border:none;border-radius:8px;font-weight:bold;font-size:16px;cursor:pointer;margin:5px 0}
-            .deploy{background:linear-gradient(90deg,#00ff88,#00cc66);color:black}
-            .stop{background:#ff0044;color:white}
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <h1>${botName}</h1>
-            <p>Assistant Bot WhatsApp - Panneau de Controle</p>
-            <p style="color:#00ff88">Par KING TECH</p>
-        </div>
+╭───「 *⚙️OUTILS* 」───╮
+│ • ${PREFIX}vv
+│ • ${PREFIX}aiimg prompt
+╰─────────────────╯
 
-        <div class="box">
-            ${status}
-        </div>
+╭───「 *🤖 IA* 」───╮
+│ • ${PREFIX}ai question
+╰─────────────╯
 
-        <div class="box">
-            <h2 style="color:#00ff88">Deploiement du Bot</h2>
-            <form method="POST" action="/deploy">
-                <input type="text" name="number" placeholder="Ex: 237651543248" />
-                <button class="btn deploy" type="submit">Deployer</button>
-            </form>
-            <button class="btn stop" onclick="alert('Arreter le bot depuis Render')">Arreter</button>
-            ${qrSection}
-        </div>
-    </body>
-    </html>
-    `)
+╭─ ${SIGNATURE} ─╮`
+
+// PANNEAU WEB POUR VOIR LE QR
+app.get('/', (req, res) => {
+    const status = isConnected? `<p style="color:green">✅ Connecté</p>` : `<p style="color:red">❌ Hors ligne</p>`
+    const qrHtml = latestQR? `<img src="${latestQR}" width="250"/><p>Scan avec WhatsApp > Appareils liés</p>` : `<p>En attente du QR...</p>`
+    res.send(`<html><body style="background:#111;color:white;text-align:center;font-family:Arial"><h1>${BOTNAME}</h1>${status}<div>${qrHtml}</div></body></html>`)
 })
 
-app.post('/deploy', (req, res) => {
-    res.redirect('/')
-})
+async function sendMenu(conn, from, mek, menuText) {
+    if (fs.existsSync(LOGO_PATH)) {
+        await conn.sendMessage(from, { image: fs.readFileSync(LOGO_PATH), caption: menuText }, { quoted: mek }).catch(() => conn.sendMessage(from, { text: menuText }, { quoted: mek }))
+    } else {
+        await conn.sendMessage(from, { text: menuText }, { quoted: mek })
+    }
+}
+
+async function getAIResponse(text) {
+    try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${GROQ_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: "llama-3.1-8b-instant", messages: [{ role: "system", content: `Tu es ${BOTNAME}.` }, { role: "user", content: text }], max_tokens: 200 })
+        })
+        const data = await res.json()
+        return data.choices?.[0]?.message?.content || "Je n'ai pas de réponse 😅"
+    } catch (e) { return "Erreur API Groq 😅" }
+}
+
+async function generateImage(prompt) {
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&model=flux`
+    const res = await fetch(url)
+    return await res.buffer()
+}
+
+async function isAdmin(conn, from, sender) {
+    try {
+        const meta = await conn.groupMetadata(from)
+        return meta.participants.some(p => p.id === sender && (p.admin === 'admin' || p.admin === 'superadmin'))
+    } catch { return false }
+}
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info')
-    
-    const sock = makeWASocket({
+    const { state, saveCreds } = await useMultiFileAuthState('./session')
+    const { version } = await fetchLatestBaileysVersion()
+    const conn = makeWASocket({
+        version,
         auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: Browsers.macOS('Chrome')
+        browser: Browsers.windows('Chrome'),
+        printQRInTerminal: false, // <- IMPORTANT: false pour Railway
+        logger: pino({ level: 'silent' })
     })
+    conn.ev.on('creds.update', saveCreds)
 
-    sock.ev.on('connection.update', async (update) => {
+    conn.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update
-        
-        if(qr) {
-            latestQR = await QRCode.toDataURL(qr)
-            console.log('Nouveau QR généré')
+        if (qr) {
+            latestQR = await QRCode.toDataURL(qr) // <- QR en image pour le web
+            qrcodeTerminal.generate(qr, { small: true }) // <- on garde pour test local
         }
-        
-        if(connection === 'close') {
-            isConnected = false
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut
-            if(shouldReconnect) startBot()
-        }
-        
-        if(connection === 'open') {
+        if (connection === 'open') {
             isConnected = true
-            latestQR = ''
-            console.log('Bot connecté avec succès!')
+            latestQR = null
+            console.log(`✅ ${BOTNAME} ${VERSION} CONNECTÉ`)
+        }
+        if (connection === 'close') {
+            isConnected = false
+            if (lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut) setTimeout(startBot, 3000)
         }
     })
 
-    sock.ev.on('creds.update', saveCreds)
+    conn.ev.on('messages.upsert', async (m) => {
+        if (!m.messages?.[0]?.message) return
+        const mek = m.messages[0]
+        const from = mek.key.remoteJid
+        const sender = mek.key.participant || mek.key.remoteJid
+        const isGroup = from.endsWith('@g.us')
+        const body = mek.message.conversation || mek.message.extendedTextMessage?.text || ''
+        const isCmd = body.startsWith(PREFIX)
+        const command = isCmd? body.slice(PREFIX.length).trim().split(' ')[0].toLowerCase() : ''
+        const q = isCmd? body.slice(PREFIX.length + command.length).trim() : ''
+        const reply = (text, mentions = []) => conn.sendMessage(from, { text, mentions }, { quoted: mek })
+
+        if (isGroup && AUTOAI[from] &&!isCmd && body.length > 2) {
+            await conn.sendPresenceUpdate('composing', from)
+            const aiReply = await getAIResponse(body)
+            await conn.sendMessage(from, { text: aiReply }, { quoted: mek })
+        }
+
+        if (command === 'open') {
+            if (!isGroup) return reply('❌ Groupe seulement')
+            if (!await isAdmin(conn, from, sender)) return reply('❌ Toi ou le bot n\'êtes pas admin')
+            if (!await isAdmin(conn, from, conn.user.id)) return reply('❌ Le bot doit être admin pour faire ça')
+            try {
+                await conn.groupSettingsUpdate(from, 'not_announcement')
+                reply('✅ GROUPE OUVERT 🟢\nTout le monde peut parler')
+            } catch (e) { reply('❌ Erreur: ' + e.message) }
+        }
+        else if (command === 'close') {
+            if (!isGroup) return reply('❌ Groupe seulement')
+            if (!await isAdmin(conn, from, sender)) return reply('❌ Toi ou le bot n\'êtes pas admin')
+            if (!await isAdmin(conn, from, conn.user.id)) return reply('❌ Le bot doit être admin pour faire ça')
+            try {
+                await conn.groupSettingsUpdate(from, 'announcement')
+                reply('🔒 GROUPE FERMÉ 🔴\nSeuls les admins peuvent parler')
+            } catch (e) { reply('❌ Erreur: ' + e.message) }
+        }
+        else if (command === 'autoai') {
+            if (!isGroup) return reply('❌ Groupe seulement')
+            if (!await isAdmin(conn, from, sender)) return reply('❌ Admin seulement')
+            AUTOAI[from] = q === 'on'
+            reply(`✅ AutoAI : ${q === 'on'? 'ON 🟢 Le bot va répondre à tout' : 'OFF 🔴'}`)
+        }
+        else if (command === 'invite') {
+            if (!isGroup) return reply('❌ Groupe seulement')
+            const meta = await conn.groupMetadata(from)
+            const code = await conn.groupInviteCode(from)
+            const link = `https://chat.whatsapp.com/${code}`
+            let text = `╭══════════╮\n┃─────((✧ INVITATION GROUPE ✧))─────\n┃\n┃ ➟ *${meta.subject}*\n┃ ➟ Membres: ${meta.participants.length}\n┃\n┃ 📢 AIDEZ-NOUS À GRANDIR!\n┃ Partagez ce lien avec vos amis 👇\n┃\n┃ ${link}\n╰══════════╯`
+            await conn.sendMessage(from, { text }, { quoted: mek })
+        }
+        else if (command === 'aiimg') {
+            if (!q) return reply(`Exemple : ${PREFIX}aiimg un lion`)
+            reply(`🎨 Génération...`)
+            const imgBuffer = await generateImage(q)
+            await conn.sendMessage(from, { image: imgBuffer, caption: `Prompt: ${q}` }, { quoted: mek })
+        }
+        else if (command === 'tagall') {
+            if (!isGroup) return reply('❌ Groupe seulement')
+            const meta = await conn.groupMetadata(from)
+            const members = meta.participants.map(p => p.id)
+            let text = `╭───「 📎TAG ALL 」───╮\n│ GROUPE : ${meta.subject}\n│ TOTAL : ${members.length}\n╰─────────────────╯\n\n`
+            for(let mem of members){ text += `➥ @${mem.split('@')[0]}\n` }
+            await conn.sendMessage(from, { text, mentions: members }, { quoted: mek })
+        }
+        else if (command === 'bot-menu' || command === 'menu') await sendMenu(conn, from, mek, getSquichyMenu())
+        else if (command === 'ping') {
+            const start = Date.now()
+            const msg = await reply('🏓 Pong...')
+            await conn.sendMessage(from, { text: `🏓 Pong! ${Date.now() - start}ms`, edit: msg.key })
+        }
+        else if (command === 'ai') {
+            if (!q) return reply(`Usage : ${PREFIX}ai ta question`)
+            const aiReply = await getAIResponse(q)
+            await conn.sendMessage(from, { text: aiReply }, { quoted: mek })
+        }
+    })
 }
 
 app.listen(PORT, () => console.log(`Panneau lancé sur le port ${PORT}`))
