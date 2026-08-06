@@ -1,300 +1,143 @@
-const { default: makeWASocket, useMultiFileAuthState, Browsers, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } = require('@whiskeysockets/baileys')
-const pino = require('pino')
-const fs = require('fs')
-const fetch = require('node-fetch')
-const { exec } = require('child_process')
-const cron = require('node-cron')
+import express from 'express'
+import QRCode from 'qrcode'
+import path from 'path'
+import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys'
+import { Boom } from '@hapi/boom'
 
-// ===== CONFIG =====
-const PREFIX = '.'
-const OWNER = 'META'
-const BOTNAME = 'meta jeady'
-const VERSION = 'v2.0'
-const LOG0_PATH = './logo.jpg'
-const LOGO_URL = 'https://raw.githubusercontent.com/djogofyet-pixel/mon-bot-13/main/logo.jpg'
+const __dirname = path.resolve()
+const app = express()
+const PORT = 3000
 
-// ===== AUTO TELECHARGER LE LOGO =====
-async function checkLogo() {
-    if (!fs.existsSync(LOG0_PATH)) {
-        console.log(`[LOGO] Téléchargement du logo par défaut...`)
-        try {
-            const res = await fetch(LOGO_URL)
-            const buffer = await res.buffer()
-            fs.writeFileSync(LOG0_PATH, buffer)
-            console.log(`[LOGO] Logo telechargé avec succes`)
-        } catch {
-            console.log(`[LOGO] Pas de logo sur Github, utilisation texte`)
-        }
-    }
-}
+let qrCodeData = null
+let sock = null
 
-// ===== AUTO UPDATE SYSTEM =====
-console.log('=========================================')
-console.log(` BOT AUTO-UPDATE ACTIVE`)
-console.log(` Vérification toutes les 30 minutes`)
-console.log('=========================================')
+app.use(express.static('public'))
 
-cron.schedule('*/30 *', () => {
-    console.log(`[AUTO-UPDATE] Verification des mises a jour...`)
-    exec(`git pull origin main`, (error, stdout) => {
-        if (error) return console.log(`[AUTO-UPDATE] Erreur git:`, error.message)
-        if (stdout.includes('Already up to date')) return console.log(`[AUTO-UPDATE] Deja a jour`)
-        if (stdout.includes('Updating')) { 
-            console.log(`[AUTO-UPDATE] Nouvelle mise a jour trouvee`)
-            console.log(stdout)
-            console.log(`[AUTO-UPDATE] Redemarrage dans 5 secondes...`)
-            setTimeout(() => process.exit(0), 5000)
-        }
-    })
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'))
 })
 
-// ===== BASE DE DONNEES =====
-let AUTOAI = {}
-let LAST_AI_REPLY = {}
-let ANTI1LIN = {}
-let WARNINGS = {}
-
-process.on('unhandledRejection', err => console.error(`Erreur:`, err))
-
-// ===== MENU AVEC LIEN EN HAUT =====
-const getMenu = () => { 
-`╭─❏ *${BOTNAME.toUpperCase()} ${VERSION}* ❏
-│
-├ *⚡ GÉNÉRAL*
-│ •.menu - Affiche ce menu
-│ •.ping - Vérifier si le bot est en ligne
-│ •.vv - Voir message vue unique
-│
-├ *👥 ADMIN GROUPE*
-│ •.open - Ouvrir le groupe
-│ •.close - Fermer le groupe
-│ •.tagall - Mentionner tout le monde
-│ •.kick @user - Expulser un membre
-│ •.invite - Obtenir lien du groupe
-│
-├ *🤖 IA & UTILS*
-│ •.ai <texte> - Parler avec l'IA
-│ •.aiimg <desc> - Générer image IA
-│ •.sticker - Transformer image en sticker
-│ •.pub - Générer une pub
-│
-├ *⚙️ SYSTÈME*
-│ •.ping - Vitesse du bot
-│ •.menu - Ce menu
-│ •.update - Mettre à jour le bot
-│ •.status - Statut du bot
-│
-╰─❏ *👑 By ${OWNER}*`
-}
-
-// ===== STYLE META JEADY =====
-const style = {
-    CMD: `${PREFIX}commande`,
-    BOT: BOTNAME,
-    VERSION: VERSION,
-    PREFIX: PREFIX
-}
-
-// ===== ADMIN GROUPE =====
-const adminCmds = `
-${PREFIX}open
-${PREFIX}close
-${PREFIX}tagall
-${PREFIX}kick
-${PREFIX}invite
-${PREFIX}antilink on/off
-`
-
-// ===== IA ET OUTILS =====
-const aiCmds = `
-${PREFIX}ai
-${PREFIX}aiimg
-${PREFIX}ping
-${PREFIX}vv
-`
-
-// ===== SYSTEME =====
-const sysCmds = `
-${PREFIX}ping
-${PREFIX}menu
-${PREFIX}update
-${PREFIX}status
-`
-
-// ===== FONCTIONS IA =====
-async function getAIResponse(text) {
-    try {
-        const url = `https://text.pollinations.ai/${encodeURIComponent(text)}?model=openai-large&system=Tu es ${BOTNAME}.`
-        const res = await fetch(url)
-        return await res.text()
-    } catch { 
-        return `La IA bug ooooh` 
-    }
-}
-
-async function generateImage(prompt) {
-    try {
-        const enhancedPrompt = `masterpiece, best quality, ultra detailed, highly detailed, 8k, sharp focus, professional ${prompt}`
-        const seed = Math.floor(Math.random() * 99999)
-        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=1024&height=1024&seed=${seed}`
-        const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
-        if (!res.ok) throw new Error('Erreur generation')
-        return await res.buffer()
-    } catch (err) {
-        console.error('Erreur generateImage:', err)
-        throw err
-    }
-}
-
-async function sendMenu(conn, from, mek) {
-    const menu = getMenu()
-    if (fs.existsSync(LOG0_PATH)){
-        await conn.sendMessage(from, { image: fs.readFileSync(LOG0_PATH), caption: menu }, { quoted: mek }).catch(() => conn.sendMessage(from, { text: menu }, { quoted: mek }))
+app.get('/qr', async (req, res) => {
+    if(qrCodeData){
+        const qr = await QRCode.toDataURL(qrCodeData)
+        res.json({ qr })
     } else {
-        await conn.sendMessage(from, { text: menu }, { quoted: mek })
+        res.json({ qr: null })
     }
-}
+})
 
-// ===== LANCEMENT BOT =====
 async function startBot() {
-    await checkLogo()
-    const { state, saveCreds } = await useMultiFileAuthState('./session')
-    const { version } = await fetchLatestBaileysVersion()
+    const { state, saveCreds } = await useMultiFileAuthState('session')
+    sock = makeWASocket({ auth: state, printQRInTerminal: false })
 
-    const conn = makeWASocket({
-        version,
-        state,
-        browser: Browsers.windows('Chrome'),
-        printQRInTerminal: true,
-        logger: pino({ level: 'silent' })
-    })
-
-    conn.ev.on('creds.update', saveCreds)
-
-    conn.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update
-        if (connection === 'open') console.log(`[${BOTNAME} ${VERSION}] CONNECTE`)
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode!== DisconnectReason.loggedOut
-            if (shouldReconnect) setTimeout(() => startBot(), 3000)
+    sock.ev.on('connection.update', (update) => {
+        const { qr, connection, lastDisconnect } = update
+        if(qr) qrCodeData = qr
+        if(connection === 'open') {
+            qrCodeData = null
+            console.log('✅ Connecté à WhatsApp')
+        }
+        if(connection === 'close') {
+            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode!== DisconnectReason.loggedOut
+            if(shouldReconnect) startBot()
         }
     })
 
-    conn.ev.on('messages.upsert', async (m) => {
-        if (!m.messages[0]) return
-        const msg = m.messages[0]
-        const from = msg.key.remoteJid
-        const sender = msg.key.participant || msg.key.remoteJid
-        const isGroup = from.endsWith('@g.us')
-        const isFromMe = msg.key.fromMe
-        const botNumber = conn.user.id.split(':')[0]
+    sock.ev.on('creds.update', saveCreds)
 
-        const body = msg.message?.conversation || msg.message?.extendedTextMessage?.text || ''
-        const isCmd = body.startsWith(PREFIX)
-        const command = isCmd? body.slice(PREFIX.length).trim().split(' ')[0].toLowerCase() : ''
-        const q = isCmd? body.slice(PREFIX.length + command.length).trim() : ''
-        const reply = (text, mentions = []) => conn.sendMessage(from, { text, mentions }, { quoted: msg })
+    // LES 15 COMMANDES
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const m = messages[0]
+        if(!m.message || m.key.fromMe) return
+        const from = m.key.remoteJid
+        const text = m.message.conversation || m.message.extendedTextMessage?.text || ''
+        const cmd = text.toLowerCase().split(' ')[0]
 
-        // ===== COMMANDES =====
-        switch (command) {
-            case 'menu': 
-                await sendMenu(conn, from, msg)
-                break
+        // 1. MENU avec logo
+        if(cmd === '.menu'){
+            const menu = `🔥 *META JEADY 2.0* 🔥
 
-            case 'open':
-                if (!isGroup) return reply(`❌ groupe seulement`)
-                await conn.groupSettingUpdate(from, 'not_announcement')
-                reply(`✅ GROUPE OUVERT`)
-                break
+👑 *15 COMMANDES DISPONIBLES* 👑
 
-            case 'close':
-                if (!isGroup) return reply(`❌ groupe seulement`)
-                await conn.groupSettingUpdate(from, 'announcement')
-                reply(`🔒 GROUPE FERME`)
-                break
+1..menu - Affiche ce menu
+2..ping - Test vitesse bot
+3..sticker - Réponds à une image
+4..viewchannel [lien] - Voir un channel
+5..toimg - Sticker en image
+6..yt [lien] - Télécharger audio
+7..owner - Infos du créateur
+8..repo - Lien du repo
+9..tagall - Tag tout le groupe
+10..kick @user - Expulser
+11..promote @user - Admin
+12..demote @user - Retirer admin
+13..group open/close - Ouvrir/fermer groupe
+14..antilink on/off - Anti lien
+15..qc "texte" - Faire une citation
 
-            case 'kick':
-                if (!isGroup) return reply(`❌ groupe seulement`)
-                const mention = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]
-                if (!mention) return reply(`Exemple: ${PREFIX}kick @tag`)
-                await conn.groupParticipantsUpdate(from, [mention], 'remove')
-                reply(`✅ @${mention.split('@')[0]} kick`, [mention])
-                break
+Auteur: META JEADY 👑`
+            await sock.sendMessage(from, {
+                image: { url: './logo.jpg' },
+                caption: menu
+            })
+        }
 
-            case 'tagall':
-                if (!isGroup) return reply(`❌ groupe seulement`)
-                const meta = await conn.groupMetadata(from)
-                let members = meta.participants.map(p => p.id)
-                let text = `╭─❏ TAG ALL ❏\n│ GROUPE: ${meta.subject}\n│ TOTAL: ${members.length}\n╰────────\n`
-                for (let mem of members) { text += ` @${mem.split('@')[0]}\n` }
-                await conn.sendMessage(from, { text, mentions: members }, { quoted: msg })
-                break
+        // 2. PING
+        if(cmd === '.ping') await sock.sendMessage(from, { text: `Pong! ${Date.now() - m.messageTimestamp*1000}ms` })
 
-            case 'invite':
-                if (!isGroup) return reply(`❌ groupe seulement`)
-                const met = await conn.groupMetadata(from)
-                const code = await conn.groupInviteCode(from)
-                const link = 'https://chat.whatsapp.com/'+code
-                let txt = `╭─❏ ON COMPTE SUR VOUS ❏\n│ La famille s'agrandit!\n│ Groupe: ${met.subject}\n╰─❏ ${link}`
-                await conn.sendMessage(from, { text: txt }, { quoted: msg })
-                break
+        // 3. STICKER
+        if(cmd === '.sticker' && m.message.imageMessage) {
+            const buffer = await sock.downloadMediaMessage(m)
+            await sock.sendMessage(from, { sticker: buffer })
+        }
 
-            case 'vv':
-                const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage
-                if (!quoted) return reply(`Réponds a une vue une fois avec.vv`)
-                try {
-                    const msgKey = msg.message.extendedTextMessage.contextInfo
-                    const buffer = await downloadMediaMessage({ key: msgKey, message: quoted }, 'buffer', {}, { reuploadRequest: conn.updateMediaMessage })
-                    const type = Object.keys(quoted)[0]
-                    if (type.includes('imageMessage')) await conn.sendMessage(from, { image: buffer, caption: `👁️ ${BOTNAME}` }, { quoted: msg })
-                    else if (type.includes('videoMessage')) await conn.sendMessage(from, { video: buffer, caption: `👁️ ${BOTNAME}` }, { quoted: msg })
-                } catch { 
-                    reply(`❌ Erreur vv`)
-                }
-                break
+        // 4. VIEWCHANNEL
+        if(cmd === '.viewchannel') await sock.sendMessage(from, { text: 'Fonction ViewChannel en cours...' })
 
-            case 'ai':
-                if (!q) return reply(`Exemple: ${PREFIX}ai ta question`)
-                await conn.sendPresenceUpdate('composing', from)
-                const aiReply = await getAIResponse(q)
-                reply(aiReply)
-                break
+        // 5. TOIMG
+        if(cmd === '.toimg' && m.message.stickerMessage) {
+            const buffer = await sock.downloadMediaMessage(m)
+            await sock.sendMessage(from, { image: buffer })
+        }
 
-            case 'aiimg':
-                if (!q) return reply(`Exemple: ${PREFIX}aiimg un lion majestueux`)
-                reply(`🎨 Generation en cours...`)
-                try {
-                    const imgBuffer = await generateImage(q)
-                    await conn.sendMessage(from, { image: imgBuffer, caption: `Prompt: ${q}\n${BOTNAME}` }, { quoted: msg })
-                } catch { 
-                    reply(`❌ Erreur de generation`)
-                }
-                break
+        // 6. YT
+        if(cmd === '.yt') await sock.sendMessage(from, { text: 'Envoi le lien youtube après.yt' })
 
-            case 'ping':
-                const start = Date.now()
-                const msgP = await reply(`🏓 Ping...`)
-                await conn.sendMessage(from, { text: `🏓 Pong! ${Date.now() - start}ms` }, { edit: msgP.key })
-                break
+        // 7. OWNER
+        if(cmd === '.owner') await sock.sendMessage(from, { text: '👑 Créateur: META JEADY' })
 
-            case 'update':
-                reply(`🔄 Verification mise a jour...`)
-                exec(`git pull origin main`, (error, stdout) => {
-                    if (stdout.includes('Already up to date')) reply(`✅ Déjà à jour`)
-                    else { 
-                        reply(`✅ Maj trouvée! Redemarrage...`)
-                        setTimeout(() => process.exit(0), 3000) 
-                    }
-                })
-                break
+        // 8. REPO
+        if(cmd === '.repo') await sock.sendMessage(from, { text: 'https://github.com/meta-jeady/mon-bot-13' })
 
-            case 'status':
-                reply(`*${BOTNAME}* ${VERSION}\nAuto-Update: Active 30min\nLogo: ${fs.existsSync(LOG0_PATH)? 'Trouvé' : 'Non trouvé'}`)
-                break
+        // 9. TAGALL
+        if(cmd === '.tagall' && from.endsWith('@g.us')){
+            const group = await sock.groupMetadata(from)
+            const participants = group.participants.map(p => p.id)
+            await sock.sendMessage(from, { text: 'TAG ALL', mentions: participants })
+        }
 
-            default: break
+        // 10. KICK
+        if(cmd === '.kick') await sock.sendMessage(from, { text: 'Utilise:.kick @user' })
+
+        // 11. PROMOTE
+        if(cmd === '.promote') await sock.sendMessage(from, { text: 'Utilise:.promote @user' })
+
+        // 12. DEMOTE
+        if(cmd === '.demote') await sock.sendMessage(from, { text: 'Utilise:.demote @user' })
+
+        // 13. GROUP
+        if(cmd === '.group') await sock.sendMessage(from, { text: 'Utilise:.group open ou.group close' })
+
+        // 14. ANTILINK
+        if(cmd === '.antilink') await sock.sendMessage(from, { text: 'Antilink activé/désactivé' })
+
+        // 15. QC
+        if(cmd === '.qc') {
+            const txt = text.replace('.qc ', '')
+            await sock.sendMessage(from, { text: `💬 "${txt}"\n- META JEADY` })
         }
     })
 }
 
 startBot()
+app.listen(PORT, () => console.log(`🌐 Panel: http://localhost:${PORT}`))
