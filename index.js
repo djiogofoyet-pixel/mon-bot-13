@@ -21,9 +21,10 @@ process.on('unhandledRejection', (err) => console.error('Erreur:', err))
 
 // ===== MENU AVEC LIEN EN HAUT =====
 const getMenu = () => `╭───『 𝚅𝙴𝚄𝚇 𝙲𝚁𝙴𝚁 𝚃𝙾𝙽 𝙿𝚁𝙾𝙿𝚁𝙴 𝙱𝙾𝚃 』───╮
-║
-║ 👆 𝙲𝙻𝙸𝚀𝚄𝙴 𝙸𝙲𝙸 👆
-║ https://vpron.netlify.app
+║https://whatsapp.com/channel/0029VbE0WHTKWEKo9iyxl43e
+
+║ 👆 𝙲𝙻𝙸𝚀𝚄𝙴 𝙸𝙲𝙸 
+║ 
 ║
 ╰───────────────────────────────────────╯
 
